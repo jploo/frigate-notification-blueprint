@@ -326,11 +326,9 @@ actions:
                | list }}
           required_zones: !input required_zones
           object_filter: !input object_filter
-          previous_objects: "{{ trigger.payload_json.before.data.objects | default([]) }}"
           objects: "{{ trigger.payload_json.after.data.objects | default([]) }}"
           labels: "{{ objects }}"
           label: "{{ objects | first | default('object') }}"
-          previous_zones: "{{ trigger.payload_json.before.data.zones | default([]) }}"
           zones: "{{ trigger.payload_json.after.data.zones | default([]) }}"
           detection_ids: "{{ trigger.payload_json.after.data.detections | default([]) }}"
           event_id: "{{ detection_ids | first | default(review_id) }}"
@@ -356,30 +354,9 @@ actions:
 
       - condition: template
         value_template: >
-          {% set zone = namespace(before=false, after=false) %}
-          {% for required_zone in required_zones %}
-            {% if required_zone in previous_zones %}
-              {% set zone.before = true %}
-            {% endif %}
-            {% if required_zone in zones %}
-              {% set zone.after = true %}
-            {% endif %}
-          {% endfor %}
-          {% set object = namespace(before=false, after=false) %}
-          {% for required_object in object_filter %}
-            {% if required_object in previous_objects %}
-              {% set object.before = true %}
-            {% endif %}
-            {% if required_object in objects %}
-              {% set object.after = true %}
-            {% endif %}
-          {% endfor %}
           {{ review_type in ['new', 'update'] and
              severity in event_types and
-             (review_type == 'new' or
-              previous_severity != severity or
-              (required_zones | count > 0 and zone.after and not zone.before) or
-              (object_filter | count > 0 and object.after and not object.before)) }}
+             (review_type == 'new' or previous_severity != severity) }}
 
       - condition: template
         value_template: >
