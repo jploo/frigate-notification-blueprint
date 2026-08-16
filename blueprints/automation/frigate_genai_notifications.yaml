@@ -416,6 +416,8 @@ actions:
           notification_tag: "{{ configured_tag }}"
           genai_title: ""
           genai_message: ""
+          last_genai_title: ""
+          last_genai_message: ""
           review_summary_title: ""
           review_summary_message: ""
           object_descriptions: {}
@@ -425,7 +427,7 @@ actions:
       - choose:
           - alias: Send templated notification immediately
             conditions:
-              - "{{ filters_match and (initial_behavior in ['send_then_replace', 'template_only'] or genai_source == 'none') }}"
+              - "{{ filters_match | bool and (initial_behavior in ['send_then_replace', 'template_only'] or genai_source == 'none') }}"
             sequence:
               - action: "{{ notify_service }}"
                 data:
@@ -454,7 +456,7 @@ actions:
                   sent: true
 
       - if:
-          - "{{ filters_match and (initial_behavior == 'template_only' or genai_source == 'none') }}"
+          - "{{ filters_match | bool and (initial_behavior == 'template_only' or genai_source == 'none') }}"
         then:
           - stop: Template-only notification complete.
 
@@ -593,7 +595,7 @@ actions:
                     genai_title: "{{ review_summary_title }}"
 
             - if:
-                - "{{ relevant_update and filters_match and not sent and (initial_behavior in ['send_then_replace', 'template_only'] or genai_source == 'none') }}"
+                - "{{ relevant_update and filters_match | bool and not sent and (initial_behavior in ['send_then_replace', 'template_only'] or genai_source == 'none') }}"
               then:
                 - action: "{{ notify_service }}"
                   data:
@@ -622,7 +624,8 @@ actions:
                     sent: true
 
             - if:
-                - "{{ relevant_update and filters_match and genai_message | trim | length > 0 }}"
+                - "{{ relevant_update and filters_match | bool and genai_message | trim | length > 0 }}"
+                - "{{ genai_message | trim != last_genai_message | trim or genai_title | trim != last_genai_title | trim }}"
               then:
                 - choose:
                     - alias: Send silent notification update
@@ -690,9 +693,11 @@ actions:
                               uri: "{{ url_3 }}"
                 - variables:
                     sent: true
+                    last_genai_title: "{{ genai_title }}"
+                    last_genai_message: "{{ genai_message }}"
 
       - if:
-          - "{{ filters_match and not sent and initial_behavior == 'wait_then_fallback' }}"
+          - "{{ filters_match | bool and not sent and initial_behavior == 'wait_then_fallback' }}"
         then:
           - action: "{{ notify_service }}"
             data:
