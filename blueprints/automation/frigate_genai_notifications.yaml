@@ -379,35 +379,21 @@ actions:
         value_template: >
           {{ selected_camera_names | count == 0 or camera in selected_camera_names }}
 
-      - condition: template
-        value_template: >
-          {% if object_filter | count == 0 %}
-            true
-          {% else %}
-            {% set ns = namespace(match=false) %}
-            {% for object in objects %}
-              {% if object in object_filter %}
-                {% set ns.match = true %}
-              {% endif %}
-            {% endfor %}
-            {{ ns.match }}
-          {% endif %}
-
-      - condition: template
-        value_template: >
-          {% if required_zones | count == 0 %}
-            true
-          {% else %}
-            {% set ns = namespace(match=false) %}
-            {% for zone in zones %}
-              {% if zone in required_zones %}
-                {% set ns.match = true %}
-              {% endif %}
-            {% endfor %}
-            {{ ns.match }}
-          {% endif %}
-
       - variables:
+          filters_match: >
+            {% set object = namespace(match=object_filter | count == 0) %}
+            {% for detected_object in objects %}
+              {% if detected_object in object_filter %}
+                {% set object.match = true %}
+              {% endif %}
+            {% endfor %}
+            {% set zone = namespace(match=required_zones | count == 0) %}
+            {% for detected_zone in zones %}
+              {% if detected_zone in required_zones %}
+                {% set zone.match = true %}
+              {% endif %}
+            {% endfor %}
+            {{ object.match and zone.match }}
           attachment_url: >
             {% set root = base_url ~ '/api/frigate' ~ client_id ~ '/notifications/' %}
             {% if attachment_choice == 'thumbnail' %}
@@ -439,7 +425,7 @@ actions:
       - choose:
           - alias: Send templated notification immediately
             conditions:
-              - "{{ initial_behavior in ['send_then_replace', 'template_only'] or genai_source == 'none' }}"
+              - "{{ filters_match and (initial_behavior in ['send_then_replace', 'template_only'] or genai_source == 'none') }}"
             sequence:
               - action: "{{ notify_service }}"
                 data:
@@ -468,7 +454,7 @@ actions:
                   sent: true
 
       - if:
-          - "{{ initial_behavior == 'template_only' or genai_source == 'none' }}"
+          - "{{ filters_match and (initial_behavior == 'template_only' or genai_source == 'none') }}"
         then:
           - stop: Template-only notification complete.
 
@@ -547,6 +533,20 @@ actions:
                               }) }}
 
                 - variables:
+                    filters_match: >
+                      {% set object = namespace(match=object_filter | count == 0) %}
+                      {% for detected_object in objects %}
+                        {% if detected_object in object_filter %}
+                          {% set object.match = true %}
+                        {% endif %}
+                      {% endfor %}
+                      {% set zone = namespace(match=required_zones | count == 0) %}
+                      {% for detected_zone in zones %}
+                        {% if detected_zone in required_zones %}
+                          {% set zone.match = true %}
+                        {% endif %}
+                      {% endfor %}
+                      {{ object.match and zone.match }}
                     object_description_message: >
                       {% set preferred = namespace(items=[]) %}
                       {% set fallback = namespace(items=[]) %}
@@ -593,7 +593,36 @@ actions:
                     genai_title: "{{ review_summary_title }}"
 
             - if:
-                - "{{ relevant_update and genai_message | trim | length > 0 }}"
+                - "{{ relevant_update and filters_match and not sent and (initial_behavior in ['send_then_replace', 'template_only'] or genai_source == 'none') }}"
+              then:
+                - action: "{{ notify_service }}"
+                  data:
+                    title: "{{ configured_title }}"
+                    message: "{{ configured_message }}"
+                    data:
+                      tag: "{{ notification_tag }}"
+                      group: "{{ notification_group }}"
+                      alert_once: true
+                      image: "{{ attachment_url }}"
+                      clickAction: "{{ tap_action }}"
+                      url: "{{ tap_action }}"
+                      attachment:
+                        url: "{{ attachment_url }}"
+                      actions:
+                        - action: URI
+                          title: "{{ button_1 }}"
+                          uri: "{{ url_1 }}"
+                        - action: URI
+                          title: "{{ button_2 }}"
+                          uri: "{{ url_2 }}"
+                        - action: "{{ 'URI' if '/' in url_3 else url_3 }}"
+                          title: "{{ button_3 }}"
+                          uri: "{{ url_3 }}"
+                - variables:
+                    sent: true
+
+            - if:
+                - "{{ relevant_update and filters_match and genai_message | trim | length > 0 }}"
               then:
                 - choose:
                     - alias: Send silent notification update
@@ -663,7 +692,7 @@ actions:
                     sent: true
 
       - if:
-          - "{{ not sent and initial_behavior == 'wait_then_fallback' }}"
+          - "{{ filters_match and not sent and initial_behavior == 'wait_then_fallback' }}"
         then:
           - action: "{{ notify_service }}"
             data:
