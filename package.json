@@ -1,0 +1,11 @@
+{
+  "name": "frigate-notification-blueprint",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "validate:yaml": "node scripts/validate-yaml.mjs"
+  },
+  "devDependencies": {
+    "yaml": "^2.8.0"
+  }
+}

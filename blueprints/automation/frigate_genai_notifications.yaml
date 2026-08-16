@@ -1,0 +1,667 @@
+blueprint:
+  name: Frigate GenAI Notifications
+  description: >
+    Simplified Frigate MQTT notifications with explicit GenAI message handling.
+    Uses Frigate review events as the main notification source and can wait for
+    GenAI review summaries, GenAI object descriptions, or both. When both are
+    enabled, review summaries are preferred for multi-object activity and object
+    descriptions are preferred for single-object activity. If an object filter is
+    configured, object descriptions with labels matching that filter are preferred.
+  domain: automation
+  source_url: https://github.com/jploo/frigate-notification-blueprint
+
+  input:
+    mqtt:
+      name: MQTT Topics
+      icon: mdi:message-processing
+      input:
+        review_topic:
+          name: Review topic
+          default: frigate/reviews
+          selector:
+            text: {}
+        tracked_object_update_topic:
+          name: Tracked object update topic
+          default: frigate/tracked_object_update
+          selector:
+            text: {}
+    target:
+      name: Notification Target
+      icon: mdi:bell
+      input:
+        notify_service:
+          name: Notify service
+          description: Use a mobile app notify service such as notify.mobile_app_pixel_8, or a notify group such as notify.family.
+          default: notify.mobile_app_your_phone
+          selector:
+            text: {}
+
+    filters:
+      name: Filters
+      icon: mdi:filter
+      input:
+        event_types:
+          name: Event types
+          description: Frigate review severities that should create notifications.
+          default:
+            - alert
+          selector:
+            select:
+              multiple: true
+              options:
+                - label: Alerts
+                  value: alert
+                - label: Detections
+                  value: detection
+        camera:
+          name: Frigate cameras
+          description: Optional Frigate camera entities from the Home Assistant Frigate integration. Leave empty for all cameras.
+          selector:
+            entity:
+              filter:
+                integration: frigate
+                domain: camera
+              multiple: true
+        required_zones:
+          name: Required zones
+          description: Optional list of zones. A notification is sent only when the review includes at least one of these zones.
+          default: []
+          selector:
+            select:
+              multiple: true
+              custom_value: true
+              options: []
+        object_filter:
+          name: Objects
+          description: Optional list of object labels. Object descriptions with labels matching this list are preferred.
+          default: []
+          selector:
+            select:
+              multiple: true
+              custom_value: true
+              options:
+                - person
+                - car
+                - dog
+                - cat
+                - package
+
+    text:
+      name: Notification Text
+      icon: mdi:format-text
+      input:
+        title:
+          name: Default title
+          description: Supports variables such as {{ camera_name }}, {{ label }}, {{ review_id }}, and {{ genai_title }}.
+          default: "{{ camera_name }}"
+          selector:
+            text: {}
+        message:
+          name: Default message
+          description: Supports variables such as {{ label }}, {{ camera_name }}, {{ zones }}, {{ review_id }}, and {{ genai_message }}.
+          default: "{{ label }} detected on {{ camera_name }}"
+          selector:
+            text:
+              multiline: true
+        genai_source:
+          name: GenAI source
+          default: object_descriptions
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - label: None
+                  value: none
+                - label: Review summary
+                  value: review_summary
+                - label: Object descriptions
+                  value: object_descriptions
+                - label: Review summary, then object descriptions
+                  value: review_then_object
+                - label: Object descriptions, then review summary
+                  value: object_then_review
+                - label: Both combined
+                  value: both
+        genai_replacement:
+          name: GenAI replacement
+          description: Choose whether GenAI replaces only the message body or both title and message.
+          default: message
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - label: Message only
+                  value: message
+                - label: Title and message
+                  value: title_and_message
+        initial_behavior:
+          name: Initial notification behavior
+          description: Controls whether a templated notification is sent before GenAI text is available.
+          default: wait_then_fallback
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - label: Send template immediately, replace with GenAI
+                  value: send_then_replace
+                - label: Wait for GenAI, send template on timeout
+                  value: wait_then_fallback
+                - label: Wait for GenAI only
+                  value: wait_only
+                - label: Always use template only
+                  value: template_only
+
+    media:
+      name: Media
+      icon: mdi:image
+      input:
+        base_url:
+          name: Home Assistant base URL
+          description: Optional. Leave blank to use relative URLs where supported by the mobile app.
+          default: ""
+          selector:
+            text: {}
+        client_id:
+          name: Frigate client ID
+          description: Optional Frigate HA integration client ID suffix. Leave blank for the default integration.
+          default: ""
+          selector:
+            text: {}
+        attachment:
+          name: Attachment
+          default: review_gif
+          selector:
+            select:
+              mode: dropdown
+              options:
+                - label: Review GIF
+                  value: review_gif
+                - label: Thumbnail
+                  value: thumbnail
+                - label: Snapshot
+                  value: snapshot
+                - label: Snapshot with bounding box
+                  value: snapshot_bbox
+                - label: Cropped snapshot
+                  value: snapshot_crop
+                - label: Cropped snapshot with bounding box
+                  value: snapshot_crop_bbox
+                - label: Object GIF
+                  value: object_gif
+
+    behavior:
+      name: Behavior
+      icon: mdi:timer-outline
+      input:
+        update_timeout:
+          name: MQTT update timeout
+          description: Total time this automation will wait for updates for a review. Later updates are discarded.
+          default: 120
+          selector:
+            number:
+              min: 5
+              max: 1800
+              unit_of_measurement: seconds
+              mode: box
+        silence_timer:
+          name: Silence action duration
+          description: How long the default Silence New Notifications action disables this automation.
+          default: 30
+          selector:
+            number:
+              min: 0
+              max: 3600
+              unit_of_measurement: minutes
+              mode: box
+
+    actions:
+      name: Notification Actions
+      icon: mdi:gesture-tap-button
+      input:
+        tap_action:
+          name: Tap action
+          default: "{{ base_url }}/api/frigate{{ client_id }}/notifications/{{ event_id }}/{{ camera }}/clip.mp4"
+          selector:
+            text: {}
+        group:
+          name: Notification group
+          description: Supports variables. Determines how notifications are grouped on the mobile device.
+          default: "{{ camera }}-frigate"
+          selector:
+            text: {}
+        tag:
+          name: Notification tag
+          description: Supports variables. Use {{ review_id }} or {{ event_id }} to replace existing notifications with updates.
+          default: "{{ review_id }}"
+          selector:
+            text: {}
+        button_1:
+          name: Action Button 1 Text
+          default: View Clip
+          selector:
+            text: {}
+        url_1:
+          name: Action Button 1 URL
+          default: "{{ base_url }}/api/frigate{{ client_id }}/notifications/{{ event_id }}/{{ camera }}/clip.mp4"
+          selector:
+            text: {}
+        button_2:
+          name: Action Button 2 Text
+          default: View Snapshot
+          selector:
+            text: {}
+        url_2:
+          name: Action Button 2 URL
+          default: "{{ base_url }}/api/frigate{{ client_id }}/notifications/{{ event_id }}/snapshot.jpg"
+          selector:
+            text: {}
+        button_3:
+          name: Action Button 3 Text
+          default: Silence New Notifications
+          selector:
+            text: {}
+        url_3:
+          name: Action Button 3 URL
+          default: "silence-{{ this.entity_id }}"
+          selector:
+            text: {}
+
+mode: parallel
+max: 20
+max_exceeded: silent
+
+triggers:
+  - trigger: mqtt
+    topic: !input review_topic
+    id: review
+  - trigger: event
+    event_type: mobile_app_notification_action
+    id: silence
+
+conditions: []
+
+actions:
+  - choose:
+      - alias: Silence New Notifications
+        conditions:
+          - condition: trigger
+            id: silence
+          - "{{ trigger.event.data.action == 'silence-' ~ this.entity_id }}"
+        sequence:
+          - action: automation.turn_off
+            target:
+              entity_id: "{{ this.entity_id }}"
+            data:
+              stop_actions: false
+          - delay:
+              minutes: !input silence_timer
+          - action: automation.turn_on
+            target:
+              entity_id: "{{ this.entity_id }}"
+
+    default:
+      - variables:
+          review: "{{ trigger.payload_json }}"
+          after: "{{ trigger.payload_json.after | default({}) }}"
+          before: "{{ trigger.payload_json.before | default({}) }}"
+          review_type: "{{ trigger.payload_json.type | default('') }}"
+          review_id: "{{ trigger.payload_json.after.id | default('') }}"
+          camera: "{{ trigger.payload_json.after.camera | default('') }}"
+          camera_name: "{{ camera | replace('_', ' ') | title }}"
+          severity: "{{ trigger.payload_json.after.severity | default('') }}"
+          previous_severity: "{{ trigger.payload_json.before.severity | default('') }}"
+          event_types: !input event_types
+          frigate_cameras: !input camera
+          selected_camera_names: >
+            {{ frigate_cameras
+               | expand
+               | map(attribute='attributes.camera_name')
+               | reject('undefined')
+               | list }}
+          required_zones: !input required_zones
+          object_filter: !input object_filter
+          objects: "{{ trigger.payload_json.after.data.objects | default([]) }}"
+          labels: "{{ objects }}"
+          label: "{{ objects | first | default('object') }}"
+          zones: "{{ trigger.payload_json.after.data.zones | default([]) }}"
+          detection_ids: "{{ trigger.payload_json.after.data.detections | default([]) }}"
+          event_id: "{{ detection_ids | first | default(review_id) }}"
+          base_url: !input base_url
+          client_id: !input client_id
+          attachment_choice: !input attachment
+          notify_service: !input notify_service
+          configured_title: !input title
+          configured_message: !input message
+          genai_source: !input genai_source
+          genai_replacement: !input genai_replacement
+          initial_behavior: !input initial_behavior
+          configured_group: !input group
+          configured_tag: !input tag
+          configured_tap_action: !input tap_action
+          button_1: !input button_1
+          button_2: !input button_2
+          button_3: !input button_3
+          url_1: !input url_1
+          url_2: !input url_2
+          url_3: !input url_3
+          update_timeout: !input update_timeout
+
+      - condition: template
+        value_template: >
+          {{ review_type in ['new', 'update'] and
+             severity in event_types and
+             (review_type == 'new' or previous_severity != severity) }}
+
+      - condition: template
+        value_template: >
+          {{ selected_camera_names | count == 0 or camera in selected_camera_names }}
+
+      - condition: template
+        value_template: >
+          {% if object_filter | count == 0 %}
+            true
+          {% else %}
+            {% set ns = namespace(match=false) %}
+            {% for object in objects %}
+              {% if object in object_filter %}
+                {% set ns.match = true %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.match }}
+          {% endif %}
+
+      - condition: template
+        value_template: >
+          {% if required_zones | count == 0 %}
+            true
+          {% else %}
+            {% set ns = namespace(match=false) %}
+            {% for zone in zones %}
+              {% if zone in required_zones %}
+                {% set ns.match = true %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.match }}
+          {% endif %}
+
+      - variables:
+          attachment_url: >
+            {% set root = base_url ~ '/api/frigate' ~ client_id ~ '/notifications/' %}
+            {% if attachment_choice == 'thumbnail' %}
+              {{ root }}{{ event_id }}/thumbnail.jpg
+            {% elif attachment_choice == 'snapshot' %}
+              {{ root }}{{ event_id }}/snapshot.jpg
+            {% elif attachment_choice == 'snapshot_bbox' %}
+              {{ root }}{{ event_id }}/snapshot.jpg?bbox=1
+            {% elif attachment_choice == 'snapshot_crop' %}
+              {{ root }}{{ event_id }}/snapshot.jpg?crop=1
+            {% elif attachment_choice == 'snapshot_crop_bbox' %}
+              {{ root }}{{ event_id }}/snapshot.jpg?bbox=1&crop=1
+            {% elif attachment_choice == 'object_gif' %}
+              {{ root }}{{ event_id }}/event_preview.gif
+            {% else %}
+              {{ root }}{{ review_id }}/review_preview.gif
+            {% endif %}
+          tap_action: "{{ configured_tap_action }}"
+          notification_group: "{{ configured_group }}"
+          notification_tag: "{{ configured_tag }}"
+          genai_title: ""
+          genai_message: ""
+          review_summary_title: ""
+          review_summary_message: ""
+          object_descriptions: {}
+          sent: false
+          deadline: "{{ as_timestamp(now()) + update_timeout }}"
+
+      - choose:
+          - alias: Send templated notification immediately
+            conditions:
+              - "{{ initial_behavior in ['send_then_replace', 'template_only'] or genai_source == 'none' }}"
+            sequence:
+              - action: "{{ notify_service }}"
+                data:
+                  title: "{{ configured_title }}"
+                  message: "{{ configured_message }}"
+                  data:
+                    tag: "{{ notification_tag }}"
+                    group: "{{ notification_group }}"
+                    alert_once: true
+                    image: "{{ attachment_url }}"
+                    clickAction: "{{ tap_action }}"
+                    url: "{{ tap_action }}"
+                    attachment:
+                      url: "{{ attachment_url }}"
+                    actions:
+                      - action: URI
+                        title: "{{ button_1 }}"
+                        uri: "{{ url_1 }}"
+                      - action: URI
+                        title: "{{ button_2 }}"
+                        uri: "{{ url_2 }}"
+                      - action: "{{ 'URI' if '/' in url_3 else url_3 }}"
+                        title: "{{ button_3 }}"
+                        uri: "{{ url_3 }}"
+              - variables:
+                  sent: true
+
+      - if:
+          - "{{ initial_behavior == 'template_only' or genai_source == 'none' }}"
+        then:
+          - stop: Template-only notification complete.
+
+      - repeat:
+          while:
+            - "{{ as_timestamp(now()) < deadline }}"
+          sequence:
+            - wait_for_trigger:
+                - trigger: mqtt
+                  topic: !input review_topic
+                  id: review_update
+                - trigger: mqtt
+                  topic: !input tracked_object_update_topic
+                  id: object_update
+              timeout:
+                seconds: "{{ [deadline - as_timestamp(now()), 1] | max | int }}"
+              continue_on_timeout: true
+
+            - if:
+                - "{{ wait.completed }}"
+              then:
+                - variables:
+                    update: "{{ wait.trigger.payload_json | default({}) }}"
+                    update_after: "{{ wait.trigger.payload_json.after | default({}) }}"
+                    is_this_review: >
+                      {{ wait.trigger.id == 'review_update' and
+                         wait.trigger.payload_json.after.id | default('') == review_id }}
+                    is_this_object: >
+                      {{ wait.trigger.id == 'object_update' and
+                         wait.trigger.payload_json.type | default('') == 'description' and
+                         wait.trigger.payload_json.id | default('') in detection_ids }}
+                    relevant_update: "{{ is_this_review or is_this_object }}"
+
+                - choose:
+                    - alias: Refresh review metadata
+                      conditions:
+                        - "{{ is_this_review }}"
+                      sequence:
+                        - variables:
+                            review: "{{ update }}"
+                            after: "{{ update_after }}"
+                            severity: "{{ update_after.severity | default(severity) }}"
+                            objects: "{{ update_after.data.objects | default(objects) }}"
+                            labels: "{{ objects }}"
+                            label: "{{ objects | first | default(label) }}"
+                            zones: "{{ update_after.data.zones | default(zones) }}"
+                            detection_ids: "{{ update_after.data.detections | default(detection_ids) }}"
+                            event_id: "{{ detection_ids | first | default(event_id) }}"
+                            review_summary_title: >
+                              {% set data = update_after.get('data', {}) %}
+                              {% set metadata = data.get('metadata') or {} %}
+                              {% set genai = data.get('genai') or {} %}
+                              {{ metadata.get('title')
+                                 or genai.get('title')
+                                 or data.get('genai_title')
+                                 or review_summary_title }}
+                            review_summary_message: >
+                              {% set data = update_after.get('data', {}) %}
+                              {% set metadata = data.get('metadata') or {} %}
+                              {% set genai = data.get('genai') or {} %}
+                              {{ metadata.get('shortSummary')
+                                 or metadata.get('summary')
+                                 or genai.get('summary')
+                                 or genai.get('shortSummary')
+                                 or data.get('genai_message')
+                                 or review_summary_message }}
+
+                    - alias: Store object description
+                      conditions:
+                        - "{{ is_this_object }}"
+                      sequence:
+                        - variables:
+                            object_descriptions: >
+                              {{ object_descriptions | combine({
+                                (update.id): update.description | default('')
+                              }) }}
+
+                - variables:
+                    object_description_message: >
+                      {% set preferred = namespace(items=[]) %}
+                      {% set fallback = namespace(items=[]) %}
+                      {% for id, description in object_descriptions.items() %}
+                        {% set item = namespace(label='') %}
+                        {% for detection_id in detection_ids %}
+                          {% if detection_id == id and loop.index0 < objects | count %}
+                            {% set item.label = objects[loop.index0] %}
+                          {% endif %}
+                        {% endfor %}
+                        {% if object_filter | count > 0 and item.label in object_filter %}
+                          {% set preferred.items = preferred.items + [description] %}
+                        {% else %}
+                          {% set fallback.items = fallback.items + [description] %}
+                        {% endif %}
+                      {% endfor %}
+                      {% if preferred.items | count > 0 %}
+                        {{ preferred.items | join('\n') }}
+                      {% else %}
+                        {{ fallback.items | join('\n') }}
+                      {% endif %}
+                    has_review_summary: "{{ review_summary_message | trim | length > 0 }}"
+                    has_object_description: "{{ object_description_message | trim | length > 0 }}"
+                    genai_message: >
+                      {% if genai_source == 'review_summary' %}
+                        {{ review_summary_message }}
+                      {% elif genai_source == 'object_descriptions' %}
+                        {{ object_description_message }}
+                      {% elif genai_source == 'review_then_object' %}
+                        {{ review_summary_message if has_review_summary else object_description_message }}
+                      {% elif genai_source == 'object_then_review' %}
+                        {{ object_description_message if has_object_description else review_summary_message }}
+                      {% elif genai_source == 'both' %}
+                        {% if objects | count > 1 and has_review_summary %}
+                          {{ review_summary_message }}
+                        {% elif objects | count <= 1 and has_object_description %}
+                          {{ object_description_message }}
+                        {% elif has_review_summary and has_object_description %}
+                          {{ review_summary_message ~ '\n\n' ~ object_description_message }}
+                        {% else %}
+                          {{ review_summary_message if has_review_summary else object_description_message }}
+                        {% endif %}
+                      {% endif %}
+                    genai_title: "{{ review_summary_title }}"
+
+            - if:
+                - "{{ relevant_update and genai_message | trim | length > 0 }}"
+              then:
+                - choose:
+                    - alias: Send silent notification update
+                      conditions:
+                        - "{{ sent }}"
+                      sequence:
+                        - action: "{{ notify_service }}"
+                          data:
+                            title: >
+                              {% if genai_replacement == 'title_and_message' and genai_title | trim | length > 0 %}
+                                {{ genai_title }}
+                              {% else %}
+                                {{ configured_title }}
+                              {% endif %}
+                            message: "{{ genai_message }}"
+                            data:
+                              tag: "{{ notification_tag }}"
+                              group: "{{ notification_group }}"
+                              alert_once: true
+                              push:
+                                sound: none
+                              image: "{{ attachment_url }}"
+                              clickAction: "{{ tap_action }}"
+                              url: "{{ tap_action }}"
+                              attachment:
+                                url: "{{ attachment_url }}"
+                              actions:
+                                - action: URI
+                                  title: "{{ button_1 }}"
+                                  uri: "{{ url_1 }}"
+                                - action: URI
+                                  title: "{{ button_2 }}"
+                                  uri: "{{ url_2 }}"
+                                - action: "{{ 'URI' if '/' in url_3 else url_3 }}"
+                                  title: "{{ button_3 }}"
+                                  uri: "{{ url_3 }}"
+                  default:
+                    - action: "{{ notify_service }}"
+                      data:
+                        title: >
+                          {% if genai_replacement == 'title_and_message' and genai_title | trim | length > 0 %}
+                            {{ genai_title }}
+                          {% else %}
+                            {{ configured_title }}
+                          {% endif %}
+                        message: "{{ genai_message }}"
+                        data:
+                          tag: "{{ notification_tag }}"
+                          group: "{{ notification_group }}"
+                          alert_once: true
+                          image: "{{ attachment_url }}"
+                          clickAction: "{{ tap_action }}"
+                          url: "{{ tap_action }}"
+                          attachment:
+                            url: "{{ attachment_url }}"
+                          actions:
+                            - action: URI
+                              title: "{{ button_1 }}"
+                              uri: "{{ url_1 }}"
+                            - action: URI
+                              title: "{{ button_2 }}"
+                              uri: "{{ url_2 }}"
+                            - action: "{{ 'URI' if '/' in url_3 else url_3 }}"
+                              title: "{{ button_3 }}"
+                              uri: "{{ url_3 }}"
+                - variables:
+                    sent: true
+
+      - if:
+          - "{{ not sent and initial_behavior == 'wait_then_fallback' }}"
+        then:
+          - action: "{{ notify_service }}"
+            data:
+              title: "{{ configured_title }}"
+              message: "{{ configured_message }}"
+              data:
+                tag: "{{ notification_tag }}"
+                group: "{{ notification_group }}"
+                alert_once: true
+                image: "{{ attachment_url }}"
+                clickAction: "{{ tap_action }}"
+                url: "{{ tap_action }}"
+                attachment:
+                  url: "{{ attachment_url }}"
+                actions:
+                  - action: URI
+                    title: "{{ button_1 }}"
+                    uri: "{{ url_1 }}"
+                  - action: URI
+                    title: "{{ button_2 }}"
+                    uri: "{{ url_2 }}"
+                  - action: "{{ 'URI' if '/' in url_3 else url_3 }}"
+                    title: "{{ button_3 }}"
+                    uri: "{{ url_3 }}"
