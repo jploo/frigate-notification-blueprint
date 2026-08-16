@@ -16,6 +16,8 @@ attachments, and explicit GenAI behavior.
 - Notification updates are silent: Android uses `alert_once` with the same
   notification tag, and iOS/macOS GenAI replacement updates use
   `push.sound: none`
+- Required-zone automations can start from a later Frigate review `update` when
+  the object first enters the selected zone.
 - Default action buttons match SgtBatten's common defaults:
   - View Clip
   - View Snapshot
