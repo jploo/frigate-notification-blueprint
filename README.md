@@ -10,6 +10,8 @@ attachments, and explicit GenAI behavior.
 
 - Primary trigger: `frigate/reviews`
 - Optional GenAI object-description updates: `frigate/tracked_object_update`
+- While a review is active, the blueprint also waits on `frigate/events` for
+  same-object zone changes so required-zone notifications can send sooner.
 - Default event type: alerts only
 - Default GenAI behavior: wait for object descriptions, then send the template
   message as a fallback on timeout

@@ -25,6 +25,12 @@ blueprint:
           default: frigate/tracked_object_update
           selector:
             text: {}
+        event_topic:
+          name: Object event topic
+          description: Used only while a review is active to detect zone entry sooner than review updates.
+          default: frigate/events
+          selector:
+            text: {}
     target:
       name: Notification Target
       icon: mdi:bell
@@ -471,6 +477,9 @@ actions:
                 - trigger: mqtt
                   topic: !input tracked_object_update_topic
                   id: object_update
+                - trigger: mqtt
+                  topic: !input event_topic
+                  id: event_update
               timeout:
                 seconds: "{{ [deadline - as_timestamp(now()), 1] | max | int }}"
               continue_on_timeout: true
@@ -488,7 +497,10 @@ actions:
                       {{ wait.trigger.id == 'object_update' and
                          wait.trigger.payload_json.type | default('') == 'description' and
                          wait.trigger.payload_json.id | default('') in detection_ids }}
-                    relevant_update: "{{ is_this_review or is_this_object }}"
+                    is_this_event: >
+                      {{ wait.trigger.id == 'event_update' and
+                         wait.trigger.payload_json.after.id | default('') in detection_ids }}
+                    relevant_update: "{{ is_this_review or is_this_object or is_this_event }}"
 
                 - choose:
                     - alias: Refresh review metadata
@@ -533,6 +545,23 @@ actions:
                               {{ object_descriptions | combine({
                                 (update.id): update.description | default('')
                               }) }}
+
+                    - alias: Refresh object event metadata
+                      conditions:
+                        - "{{ is_this_event }}"
+                      sequence:
+                        - variables:
+                            event_after: "{{ update.after | default({}) }}"
+                            event_zones: >
+                              {{ event_after.get('current_zones')
+                                 or event_after.get('entered_zones')
+                                 or [] }}
+                            event_label: "{{ event_after.get('label', '') }}"
+                            zones: >
+                              {{ (zones + event_zones) | unique | list }}
+                            objects: >
+                              {{ objects if event_label in ['', none] or event_label in objects else objects + [event_label] }}
+                            labels: "{{ objects }}"
 
                 - variables:
                     filters_match: >
@@ -625,7 +654,10 @@ actions:
 
             - if:
                 - "{{ relevant_update and filters_match | bool and genai_message | trim | length > 0 }}"
-                - "{{ genai_message | trim != last_genai_message | trim or genai_title | trim != last_genai_title | trim }}"
+                - >
+                  {{ genai_message | trim != last_genai_message | trim or
+                     (genai_replacement == 'title_and_message' and
+                      genai_title | trim != last_genai_title | trim) }}
               then:
                 - choose:
                     - alias: Send silent notification update
@@ -722,3 +754,5 @@ actions:
                   - action: "{{ 'URI' if '/' in url_3 else url_3 }}"
                     title: "{{ button_3 }}"
                     uri: "{{ url_3 }}"
+          - variables:
+              sent: true
