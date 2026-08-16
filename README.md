@@ -3,23 +3,25 @@
 This repository contains a simplified Home Assistant automation blueprint for
 Frigate MQTT notifications. It is inspired by SgtBatten's Frigate Camera
 Notifications blueprint, but intentionally narrows the scope to Frigate review
-events, mobile app / notify-group notifications, simple filtering, configurable
+and object events, mobile app / notify-group notifications, simple filtering, configurable
 attachments, and explicit GenAI behavior.
 
 ## Design Notes
 
-- Primary trigger: `frigate/reviews`
+- Primary trigger: `frigate/events`
+- Review updates: `frigate/reviews`, used after the initial object event to
+  pick up review severity, related detections, zones, and GenAI review summaries
 - Optional GenAI object-description updates: `frigate/tracked_object_update`
-- While a review is active, the blueprint also waits on `frigate/events` for
-  same-object zone changes so required-zone notifications can send sooner.
+- While an object event is active, the blueprint continues watching
+  `frigate/events` for same-object zone/object metadata changes.
 - Default event type: alerts only
-- Default GenAI behavior: wait for object descriptions, then send the template
-  message as a fallback on timeout
+- Default GenAI behavior: prefer object descriptions, then fall back to review
+  summaries when object descriptions are not generated
 - Notification updates are silent: Android uses `alert_once` with the same
   notification tag, and iOS/macOS GenAI replacement updates use
   `push.sound: none`
-- Required-zone automations can start from a later Frigate review `update` when
-  the object first enters the selected zone.
+- Required-zone automations can start from any matching Frigate object event
+  where the object is currently in one of the selected zones.
 - Default action buttons match SgtBatten's common defaults:
   - View Clip
   - View Snapshot
@@ -37,13 +39,13 @@ descriptions whose tracked-object labels match that filter are preferred.
 - `camera`: optional Frigate camera entities from the Home Assistant
   Frigate integration. Leave empty to allow all cameras.
 - `event_types`: defaults to `alert`
-- `genai_source`: defaults to object descriptions
+- `genai_source`: defaults to object descriptions, then review summaries
 - `initial_behavior`: defaults to waiting for GenAI and falling back to the
   default template on timeout
 - `genai_replacement`: choose whether GenAI replaces the message only, or both
   title and message
-- `tag`: defaults to `{{ review_id }}` so updated notifications replace the
-  prior notification for the same review
+- `tag`: defaults to `{{ review_id }}`. With object-event triggering, this is
+  initialized from the object event ID so updates replace the prior notification.
 
 ## Validation
 

@@ -2,11 +2,12 @@ blueprint:
   name: Frigate GenAI Notifications
   description: >
     Simplified Frigate MQTT notifications with explicit GenAI message handling.
-    Uses Frigate review events as the main notification source and can wait for
-    GenAI review summaries, GenAI object descriptions, or both. When both are
-    enabled, review summaries are preferred for multi-object activity and object
-    descriptions are preferred for single-object activity. If an object filter is
-    configured, object descriptions with labels matching that filter are preferred.
+    Uses Frigate object events as the main notification source for fast initial
+    notifications, then waits for GenAI review summaries, GenAI object
+    descriptions, or both. When both are enabled, review summaries are preferred
+    for multi-object activity and object descriptions are preferred for
+    single-object activity. If an object filter is configured, object
+    descriptions with labels matching that filter are preferred.
   domain: automation
   source_url: https://github.com/jploo/frigate-notification-blueprint
 
@@ -27,7 +28,7 @@ blueprint:
             text: {}
         event_topic:
           name: Object event topic
-          description: Used only while a review is active to detect zone entry sooner than review updates.
+          description: Primary trigger for fast initial notifications. Review and tracked-object topics are used afterward for GenAI updates.
           default: frigate/events
           selector:
             text: {}
@@ -48,7 +49,7 @@ blueprint:
       input:
         event_types:
           name: Event types
-          description: Frigate review severities that should create notifications.
+          description: Frigate review severities that should create notifications. Object-event triggers are treated as alerts until matching review metadata arrives.
           default:
             - alert
           selector:
@@ -70,7 +71,7 @@ blueprint:
               multiple: true
         required_zones:
           name: Required zones
-          description: Optional list of zones. A notification is sent only when the review includes at least one of these zones.
+          description: Optional list of zones. A notification is sent only when the object event or later review includes at least one of these zones.
           default: []
           selector:
             select:
@@ -111,7 +112,7 @@ blueprint:
               multiline: true
         genai_source:
           name: GenAI source
-          default: object_descriptions
+          default: object_then_review
           selector:
             select:
               mode: dropdown
@@ -201,7 +202,7 @@ blueprint:
       input:
         update_timeout:
           name: MQTT update timeout
-          description: Total time this automation will wait for updates for a review. Later updates are discarded.
+          description: Total time this automation will wait for updates for an object event. Later updates are discarded.
           default: 120
           selector:
             number:
@@ -278,8 +279,8 @@ max_exceeded: silent
 
 triggers:
   - trigger: mqtt
-    topic: !input review_topic
-    id: review
+    topic: !input event_topic
+    id: object_event
   - trigger: event
     event_type: mobile_app_notification_action
     id: silence
@@ -307,15 +308,19 @@ actions:
 
     default:
       - variables:
-          review: "{{ trigger.payload_json }}"
-          after: "{{ trigger.payload_json.after | default({}) }}"
-          before: "{{ trigger.payload_json.before | default({}) }}"
-          review_type: "{{ trigger.payload_json.type | default('') }}"
-          review_id: "{{ trigger.payload_json.after.id | default('') }}"
-          camera: "{{ trigger.payload_json.after.camera | default('') }}"
+          event: "{{ trigger.payload_json }}"
+          event_type: "{{ trigger.payload_json.type | default('') }}"
+          event_after: "{{ trigger.payload_json.after | default({}) }}"
+          event_before: "{{ trigger.payload_json.before | default({}) }}"
+          event_id: "{{ event_after.get('id') or '' }}"
+          event_before_id: "{{ event_before.get('id') or '' }}"
+          review: {}
+          after: {}
+          before: {}
+          review_id: "{{ event_id }}"
+          camera: "{{ event_after.get('camera') or '' }}"
           camera_name: "{{ camera | replace('_', ' ') | title }}"
-          severity: "{{ trigger.payload_json.after.severity | default('') }}"
-          previous_severity: "{{ trigger.payload_json.before.severity | default('') }}"
+          severity: alert
           event_types: !input event_types
           frigate_cameras: !input camera
           selected_camera_names: >
@@ -326,12 +331,15 @@ actions:
                | list }}
           required_zones: !input required_zones
           object_filter: !input object_filter
-          objects: "{{ trigger.payload_json.after.data.objects | default([]) }}"
+          event_label: "{{ event_after.get('label') or '' }}"
+          before_event_label: "{{ event_before.get('label') or '' }}"
+          objects: "{{ [event_label] if event_label | length > 0 else [] }}"
+          before_objects: "{{ [before_event_label] if before_event_label | length > 0 else [] }}"
           labels: "{{ objects }}"
           label: "{{ objects | first | default('object') }}"
-          zones: "{{ trigger.payload_json.after.data.zones | default([]) }}"
-          detection_ids: "{{ trigger.payload_json.after.data.detections | default([]) }}"
-          event_id: "{{ detection_ids | first | default(review_id) }}"
+          zones: "{{ event_after.get('current_zones') or event_after.get('entered_zones') or [] }}"
+          before_zones: "{{ event_before.get('current_zones') or event_before.get('entered_zones') or [] }}"
+          detection_ids: "{{ [event_id] if event_id | length > 0 else [] }}"
           base_url: !input base_url
           client_id: !input client_id
           attachment_choice: !input attachment
@@ -354,9 +362,7 @@ actions:
 
       - condition: template
         value_template: >
-          {{ review_type in ['new', 'update'] and
-             severity in event_types and
-             (review_type == 'new' or previous_severity != severity) }}
+          {{ event_id | length > 0 and severity in event_types }}
 
       - condition: template
         value_template: >
@@ -377,6 +383,23 @@ actions:
               {% endif %}
             {% endfor %}
             {{ object.match and zone.match }}
+          before_filters_match: >
+            {% set object = namespace(match=object_filter | count == 0) %}
+            {% for detected_object in before_objects %}
+              {% if detected_object in object_filter %}
+                {% set object.match = true %}
+              {% endif %}
+            {% endfor %}
+            {% set zone = namespace(match=required_zones | count == 0) %}
+            {% for detected_zone in before_zones %}
+              {% if detected_zone in required_zones %}
+                {% set zone.match = true %}
+              {% endif %}
+            {% endfor %}
+            {{ object.match and zone.match }}
+          newly_matched_filters: >
+            {{ filters_match | bool and
+               (event_type == 'new' or event_before_id | length == 0 or not before_filters_match | bool) }}
           attachment_url: >
             {% set root = base_url ~ '/api/frigate' ~ client_id ~ '/notifications/' %}
             {% if attachment_choice == 'thumbnail' %}
@@ -392,7 +415,7 @@ actions:
             {% elif attachment_choice == 'object_gif' %}
               {{ root }}{{ event_id }}/event_preview.gif
             {% else %}
-              {{ root }}{{ review_id }}/review_preview.gif
+              {{ root }}{{ event_id }}/event_preview.gif
             {% endif %}
           tap_action: "{{ configured_tap_action }}"
           notification_group: "{{ configured_group }}"
@@ -406,6 +429,9 @@ actions:
           object_descriptions: {}
           sent: false
           deadline: "{{ as_timestamp(now()) + update_timeout }}"
+
+      - condition: template
+        value_template: "{{ newly_matched_filters | bool }}"
 
       - choose:
           - alias: Send templated notification immediately
@@ -469,14 +495,14 @@ actions:
                     update_after: "{{ wait.trigger.payload_json.after | default({}) }}"
                     is_this_review: >
                       {{ wait.trigger.id == 'review_update' and
-                         wait.trigger.payload_json.after.id | default('') == review_id }}
+                         event_id in (update_after.get('data', {}).get('detections') or []) }}
                     is_this_object: >
                       {{ wait.trigger.id == 'object_update' and
                          wait.trigger.payload_json.type | default('') == 'description' and
                          wait.trigger.payload_json.id | default('') in detection_ids }}
                     is_this_event: >
                       {{ wait.trigger.id == 'event_update' and
-                         wait.trigger.payload_json.after.id | default('') in detection_ids }}
+                         update_after.get('id', '') in detection_ids }}
                     relevant_update: "{{ is_this_review or is_this_object or is_this_event }}"
 
                 - choose:
@@ -487,13 +513,13 @@ actions:
                         - variables:
                             review: "{{ update }}"
                             after: "{{ update_after }}"
+                            review_id: "{{ update_after.get('id', review_id) }}"
                             severity: "{{ update_after.severity | default(severity) }}"
-                            objects: "{{ update_after.data.objects | default(objects) }}"
+                            objects: "{{ update_after.get('data', {}).get('objects') or objects }}"
                             labels: "{{ objects }}"
                             label: "{{ objects | first | default(label) }}"
-                            zones: "{{ update_after.data.zones | default(zones) }}"
-                            detection_ids: "{{ update_after.data.detections | default(detection_ids) }}"
-                            event_id: "{{ detection_ids | first | default(event_id) }}"
+                            zones: "{{ update_after.get('data', {}).get('zones') or zones }}"
+                            detection_ids: "{{ update_after.get('data', {}).get('detections') or detection_ids }}"
                             review_summary_title: >
                               {% set data = update_after.get('data', {}) %}
                               {% set metadata = data.get('metadata') or {} %}
@@ -533,7 +559,7 @@ actions:
                               {{ event_after.get('current_zones')
                                  or event_after.get('entered_zones')
                                  or [] }}
-                            event_label: "{{ event_after.get('label', '') }}"
+                            event_label: "{{ event_after.get('label') or '' }}"
                             zones: >
                               {{ (zones + event_zones) | unique | list }}
                             objects: >
